@@ -222,6 +222,8 @@ void TraceThroughTree2( trace_t* t, int num, float p1f, float p2f, vec3_t p1, ve
 			visited = stack[stackptr].visited;
 			stackptr--;
 		}
+
+		// TEST This Line
 		
 		cNode_t* node = nodes + num;
 		cplane_t* plane = node->plane;
