@@ -197,17 +197,27 @@ void TraceThroughTree( trace_t* t, int num, float p1f, float p2f, vec3_t p1, vec
 // Non Recursive Version
 // History Flags
 typedef struct cstackdata_s {
-	cNode_t* node;
-	byte visited;
+	int node_num;
+	vec3_t p1;
+	float p1f;
+	vec3_t p2;
+	float p2f;
 } cstackdata_t;
 
 cstackdata_t stack[64];
 
-void TraceThroughTree2( trace_t* t, int num, float p1f, float p2f, vec3_t p1, vec3_t p2) {
+void TraceThroughTree2( trace_t* t, float p1f, float p2f, vec3_t start, vec3_t end) {
 
-	int stackptr = 0;
+	int stackptr = -1;
 	int num = 0;
-	byte visited = 0;
+	vec3_t p1;
+	vec3_t p2;
+	p1[0] = start[0];
+	p1[1] = start[1];
+	p1[2] = start[2];
+	p2[0] = end[0];
+	p2[1] = end[1];
+	p2[2] = end[2];
 
 	while(1) {
 
@@ -215,16 +225,31 @@ void TraceThroughTree2( trace_t* t, int num, float p1f, float p2f, vec3_t p1, ve
 		if (num < 0) {
 			cLeaf_t& leaf = leafs[-1-num];
 			if (leaf.opaque) {
-				t->fraction = p1f;
+				t->fraction = t->fraction < p1f ? t->fraction : p1f;
 			}
+
+			if( stackptr < 0 ) {
+				break;
+			}
+
 			// pop node
-			num = stack[stackptr].node - nodes;
-			visited = stack[stackptr].visited;
+			num = stack[stackptr].node_num;
+
+			p1[0] = stack[stackptr].p1[0];
+			p1[1] = stack[stackptr].p1[1];
+			p1[2] = stack[stackptr].p1[2];
+			p1f = stack[stackptr].p1f;
+
+			p2[0] = stack[stackptr].p2[0];
+			p2[1] = stack[stackptr].p2[1];
+			p2[2] = stack[stackptr].p2[2];
+			p2f = stack[stackptr].p2f;
+			
 			stackptr--;
+
+			continue;
 		}
 
-		// TEST This Line
-		
 		cNode_t* node = nodes + num;
 		cplane_t* plane = node->plane;
 		float t1 = DotProduct(plane->normal, p1) - plane->dist;
@@ -234,97 +259,81 @@ void TraceThroughTree2( trace_t* t, int num, float p1f, float p2f, vec3_t p1, ve
 		if ( t1 >= 1 && t2 >= 1 ) {
 			num = node->children[0];
 			continue;
-			//TraceThroughTree( t, node->children[0], p1f, p2f, p1, p2 );
-			//return;
 		}
+
 		if ( t1 < -1 && t2 < -1 ) {
 			num = node->children[1];
 			continue;
-			//TraceThroughTree( t, node->children[1], p1f, p2f, p1, p2 );
-			//return;
 		}
 
-		break;
-	}
-	
+		// put the crosspoint on the near side
+		float frac, frac2;
+		float idist;
+		int side;
+		if ( t1 < t2 ) {
+			idist = 1.0f /(t1-t2);
+			side = 1;
+			frac = frac2 = t1 * idist;
 
+		} else if ( t1 > t2 ) {
+			idist = 1.0f / (t1-t2);
+			side = 0;
+			frac = frac2 = t1 * idist;
 
-	// if <0, we are in a leaf node
-	if (num < 0) {
-		cLeaf_t& leaf = leafs[-1-num];
-		if (leaf.opaque) {
-			t->fraction = p1f;
+		} else {
+			side = 0;
+			frac = 1.0f;
+			frac2 = 0.0f;
+
 		}
-		return;
+
+		// - child 노드를 stack에 넣어 놓는다.
+		// go past the node
+		if ( frac2 < 0.0f ) {
+			frac2 = 0.0f;
+		} else if ( frac2 > 1.0f ) {
+			frac2 = 1.0f;
+		}
+
+		float midf = p1f + (p2f - p1f)*frac2;
+		vec3_t mid;
+		mid[0] = p1[0] + frac2*(p2[0] - p1[0]);
+		mid[1] = p1[1] + frac2*(p2[1] - p1[1]);
+		mid[2] = p1[2] + frac2*(p2[2] - p1[2]);
+
+		stackptr++;
+		stack[stackptr].node_num = node->children[side^1];
+		stack[stackptr].p1[0] = mid[0];
+		stack[stackptr].p1[1] = mid[1];
+		stack[stackptr].p1[2] = mid[2];
+		stack[stackptr].p1f = midf;
+		stack[stackptr].p2[0] = p2[0];
+		stack[stackptr].p2[1] = p2[1];
+		stack[stackptr].p2[2] = p2[2];
+		stack[stackptr].p2f = p2f;
+
+		// 이 노드에 의해서 잘린 경우,
+		// + child 노드를 다음 처리 노드로 설정한다.
+		// move up to the node
+		if ( frac < 0.0f ) {
+			frac = 0.0f;
+		}
+		else if ( frac > 1.0f ) {
+			frac = 1.0f;
+		}
+
+		midf = p1f + (p2f - p1f) * frac;
+		
+		mid[0] = p1[0] + frac*(p2[0] - p1[0]);
+		mid[1] = p1[1] + frac*(p2[1] - p1[1]);
+		mid[2] = p1[2] + frac*(p2[2] - p1[2]);
+
+		num = node->children[side];
+		p2f = midf;
+		p2[0] = mid[0];
+		p2[1] = mid[1];
+		p2[2] = mid[2];
 	}
-
-	//
-	// find the point distances to the seperating plane
-	cNode_t* node = nodes + num;
-	cplane_t* plane = node->plane;
-	float t1 = DotProduct(plane->normal, p1) - plane->dist;
-	float t2 = DotProduct(plane->normal, p2) - plane->dist;
-
-	// see which sides we need to consider
-	if ( t1 >= 1 && t2 >= 1 ) {
-		TraceThroughTree( t, node->children[0], p1f, p2f, p1, p2 );
-		return;
-	}
-	if ( t1 < -1 && t2 < -1 ) {
-		TraceThroughTree( t, node->children[1], p1f, p2f, p1, p2 );
-		return;
-	}
-
-	// put the crosspoint on the near side
-	float frac, frac2;
-	float idist;
-	int side;
-	if ( t1 < t2 ) {
-		idist = 1.0f /(t1-t2);
-		side = 1;
-		frac = frac2 = t1 * idist;
-	} else if ( t1 > t2 ) {
-		idist = 1.0f / (t1-t2);
-		side = 0;
-		frac = frac2 = t1 * idist;
-	} else {
-		side = 0;
-		frac = 1.0f;
-		frac2 = 0.0f;
-	}
-
-	// move up to the node
-	if ( frac < 0.0f ) {
-		frac = 0.0f;
-	}
-	else if ( frac > 1.0f ) {
-		frac = 1.0f;
-	}
-
-	float midf = p1f + (p2f - p1f) * frac;
-	vec3_t mid;
-
-	mid[0] = p1[0] + frac*(p2[0] - p1[0]);
-	mid[1] = p1[1] + frac*(p2[1] - p1[1]);
-	mid[2] = p1[2] + frac*(p2[2] - p1[2]);
-
-	TraceThroughTree( t, node->children[side], p1f, midf, p1, mid );
-
-	// go pat the node
-	if ( frac2 < 0.0f ) {
-		frac2 = 0.0f;
-	} else if ( frac2 > 1.0f ) {
-		frac2 = 1.0f;
-	}
-
-	midf = p1f + (p2f - p1f)*frac2;
-
-	mid[0] = p1[0] + frac2*(p2[0] - p1[0]);
-	mid[1] = p1[1] + frac2*(p2[1] - p1[1]);
-	mid[2] = p1[2] + frac2*(p2[2] - p1[2]);
-
-	TraceThroughTree( t, node->children[side^1], midf, p2f, mid, p2 );
-
 }
 
 typedef struct traceCase_s
@@ -334,7 +343,7 @@ typedef struct traceCase_s
 } traceCast_t;
 
 traceCast_t traces[] = {
-	{ {0.0f, 0.1f, 0.0f}, {0.0f, 20.0f, 0.0f} },
+	{ {0.0f, 2.0f, 0.0f}, {0.0f, 20.0f, 0.0f} },
 	{ {-10.0f, -10.0f, 0.0f}, { 20.0f, 20.0f, 0.0f} },
 	{ {20.0f, 20.0f, 0.0f}, { -10.0f, -10.0f, 0.0f} },
 };
@@ -352,19 +361,41 @@ int _tmain(int argc, _TCHAR* argv[])
 		trace_t t;
 		t.fraction = 1.0f;
 
+		trace_t t2;
+		t2.fraction = 1.0f;
+
 		TraceThroughTree(&t, 0, 0.0f, 1.0f, tc->p1, tc->p2);
+		TraceThroughTree2(&t2, 0.0f, 1.0f, tc->p1, tc->p2);
 
 		vec3_t hitpos;
 		hitpos[0] = tc->p1[0] + t.fraction*(tc->p2[0] - tc->p1[0]);
 		hitpos[1] = tc->p1[1] + t.fraction*(tc->p2[1] - tc->p1[1]);
 		hitpos[2] = tc->p1[2] + t.fraction*(tc->p2[2] - tc->p1[2]);
 
-		printf("Trace %d: p1(%2.2f,%2.2f,%2.2f), p2(%2.2f,%2.2f,%2.2f) = %f(%2.2f, %2.2f, %2.2f)\n",
+		printf("  Trace %d: p1(%2.2f,%2.2f,%2.2f), p2(%2.2f,%2.2f,%2.2f) = %1.3f(%2.2f, %2.2f, %2.2f)\n",
 			i,
 			tc->p1[0], tc->p1[1], tc->p1[2],
 			tc->p2[0], tc->p2[1], tc->p1[2],
 			t.fraction,
 			hitpos[0], hitpos[1], hitpos[2]);
+
+		if ( t.fraction != t2.fraction )
+		{
+			vec3_t hitpos;
+			hitpos[0] = tc->p1[0] + t2.fraction*(tc->p2[0] - tc->p1[0]);
+			hitpos[1] = tc->p1[1] + t2.fraction*(tc->p2[1] - tc->p1[1]);
+			hitpos[2] = tc->p1[2] + t2.fraction*(tc->p2[2] - tc->p1[2]);
+			printf("  Diff Trace2 %d: p1(%2.2f,%2.2f,%2.2f), p2(%2.2f,%2.2f,%2.2f) = %1.3f(%2.2f, %2.2f, %2.2f)\n",
+				i,
+				tc->p1[0], tc->p1[1], tc->p1[2],
+				tc->p2[0], tc->p2[1], tc->p1[2],
+				t2.fraction,
+				hitpos[0], hitpos[1], hitpos[2]);
+		}
+		else
+		{
+			printf("  Same Trace %d. Good Job~\n", i);
+		}
 
 		tc++;
 	}
